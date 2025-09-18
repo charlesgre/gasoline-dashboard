@@ -7,9 +7,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from functools import lru_cache
 from typing import List, Dict, Tuple, Union
+import os    
 
 # ---- Chemin par défaut (relatif à ton projet) ----
-DEFAULT_EXCEL_PATH = r".\Prices\Gasoline prices.xlsx"
+DEFAULT_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "Prices", "Gasoline prices.xlsx")
 
 # Souplesse sur les noms de colonnes
 DATE_CAND = ["date", "pricing date", "obs_date", "timestamp"]
