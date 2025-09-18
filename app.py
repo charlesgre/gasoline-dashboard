@@ -104,30 +104,28 @@ with tab_heatmap:
     search = st.text_input("🔎 Search by description", value="", placeholder="e.g., Gasoline NWE").strip().lower()
     mdf = mdf_full[mdf_full["Description"].str.lower().str.contains(search)] if search else mdf_full
 
-    # Zoom (controls text, grid, margins)
+    # --- Zoom control (drives sizes & margins) ---
     zoom = st.slider("Zoom", min_value=1.0, max_value=2.0, value=1.35, step=0.05)
-    LEFT_MARGIN = int(260 * zoom)       # space for long y labels
-    RIGHT_MARGIN = int(20 * zoom)
     FONT_SIZE   = int(12 * zoom)
     TEXT_SIZE   = int(10 * zoom)
     GRID_W      = max(1, int(1 * zoom))
     ROW_H       = int(22 * zoom)
     HEADER_PAD  = int(6 * zoom)
     HEADER_FS   = int(14 * zoom)
+    RIGHT_MARGIN = int(20 * zoom)
 
-    # columns to show
-    all_cols   = [c for c in ["Last", "Δ1d", "Δ7d", "MoM", "YTD %"] if c in mdf.columns]
+    # display columns: Last (neutral) + deltas (colored)
+    all_cols = [c for c in ["Last", "Δ1d", "Δ7d", "MoM", "YTD %"] if c in mdf.columns]
     delta_cols = [c for c in ["Δ1d", "Δ7d", "MoM", "YTD %"] if c in mdf.columns]
 
-    if mdf.empty or not all_cols or not delta_cols:
+    if mdf.empty or len(all_cols) == 0 or len(delta_cols) == 0:
         st.info("No series/columns available for the heatmap.")
     else:
-        RAW_ALL   = mdf[all_cols].astype(float).to_numpy()
-        TXT_ALL   = np.where(np.isfinite(RAW_ALL), np.vectorize(lambda x: f"{x:,.2f}")(RAW_ALL), "–")
-        RAW_DELTA = mdf[delta_cols].astype(float).to_numpy()
+        RAW_ALL = mdf[all_cols].astype(float).to_numpy()
+        TXT_ALL = np.where(np.isfinite(RAW_ALL), np.vectorize(lambda x: f"{x:,.2f}")(RAW_ALL), "–")
 
-        # rows with at least one delta present
-        row_mask  = np.isfinite(RAW_DELTA).any(axis=1)
+        RAW_DELTA = mdf[delta_cols].astype(float).to_numpy()
+        row_mask = np.isfinite(RAW_DELTA).any(axis=1)
         RAW_ALL, TXT_ALL, RAW_DELTA = RAW_ALL[row_mask], TXT_ALL[row_mask], RAW_DELTA[row_mask]
         mdf_shown = mdf[row_mask]
 
@@ -135,16 +133,25 @@ with tab_heatmap:
             st.info("After filtering, no rows have values for Δ1d/Δ7d/MoM/YTD%.")
         else:
             y_labels = mdf_shown["Description"].tolist()
-            n_rows   = RAW_ALL.shape[0]
-            n_all    = len(all_cols)
-            n_delta  = len(delta_cols)
-            x_all    = list(range(n_all))
-            x_delta  = list(range(1, n_all))  # 0 is Last
+            n_rows = RAW_ALL.shape[0]
+            n_all = len(all_cols)
+            n_delta = len(delta_cols)
+
+            # ---------- DYNAMIC LEFT MARGIN (prevents truncation) ----------
+            # rough character width in pixels for the current font size
+            char_px = 0.62 * FONT_SIZE  # 0.6–0.65 is a good rule of thumb
+            max_len = max(len(s) for s in y_labels) if y_labels else 30
+            LEFT_MARGIN = int(max(260, char_px * max_len + 40) * 1.0)  # +40 padding
+            # (you can clamp with min(..., 1100) if needed)
+            # ---------------------------------------------------------------
+
+            x_all = list(range(n_all))
+            x_delta = list(range(1, n_all))  # 0 is 'Last'
 
             # robust color scaling for deltas
             Z_DELTA = RAW_DELTA.copy()
             for j in range(n_delta):
-                col  = Z_DELTA[:, j]
+                col = Z_DELTA[:, j]
                 vmax = np.nanpercentile(np.abs(col), 95)
                 if not np.isfinite(vmax) or vmax == 0:
                     vmax = np.nanmax(np.abs(col)) if np.isfinite(np.nanmax(np.abs(col))) and np.nanmax(np.abs(col)) != 0 else 1.0
@@ -160,7 +167,7 @@ with tab_heatmap:
 
             fig = go.Figure()
 
-            # grey for missing values
+            # light gray for missing values (all cols)
             missing_mask_all = ~np.isfinite(RAW_ALL)
             if missing_mask_all.any():
                 fig.add_trace(go.Heatmap(
@@ -170,7 +177,7 @@ with tab_heatmap:
                     showscale=False, xgap=1, ygap=1, hoverinfo="skip"
                 ))
 
-            # Last (neutral)
+            # neutral 'Last' column + text
             last_vals = RAW_ALL[:, [0]]
             last_txt  = TXT_ALL[:, [0]]
             fig.add_trace(go.Heatmap(
@@ -184,7 +191,7 @@ with tab_heatmap:
                 hovertemplate="<b>%{y}</b><br>Last: %{customdata:.4f}<extra></extra>"
             ))
 
-            # Deltas (colored)
+            # colored deltas with values
             delta_txt = TXT_ALL[:, 1:]
             fig.add_trace(go.Heatmap(
                 z=Z_DELTA,
@@ -212,7 +219,7 @@ with tab_heatmap:
                                    line=dict(color="black", width=GRID_W)))
             fig.update_layout(shapes=shapes)
 
-            # lock margins (align with header), no auto y-margins
+            # lock margins (no automargin → we control the space)
             fig.update_xaxes(showticklabels=False, range=[-0.5, n_all - 0.5])
             fig.update_yaxes(automargin=False, tickfont=dict(size=FONT_SIZE))
             fig.update_layout(
@@ -221,28 +228,22 @@ with tab_heatmap:
                 height=max(int(650 * zoom), ROW_H * n_rows)
             )
 
-            # ---------- STICKY HEADER (page-level; no wrapper = no white gap) ----------
+            # sticky header aligned with plot area
             st.markdown(
                 f"""
                 <style>
                   .sticky-heat-header {{
-                      position: sticky;
-                      top: 0;                 /* stays at the top of the page while scrolling */
-                      z-index: 1000;
-                      background: #ffffff;
-                      border-bottom: 1px solid #000;
-                      padding: {HEADER_PAD}px 8px;
-                      padding-right: {RIGHT_MARGIN}px;
-                    }}
+                      position: sticky; top: 0; z-index: 1000;
+                      background: #ffffff; border-bottom: 1px solid #000;
+                      padding: {HEADER_PAD}px 8px; padding-right: {RIGHT_MARGIN}px;
+                  }}
                   .sticky-heat-grid {{
                       display: grid;
                       grid-template-columns: {LEFT_MARGIN}px repeat({n_all}, 1fr);
                       gap: 0px;
                   }}
                   .sticky-heat-cell {{
-                      text-align: center;
-                      font-weight: 700;
-                      color: #111827;
+                      text-align: center; font-weight: 700; color: #111827;
                       font-size: {HEADER_FS}px;
                   }}
                 </style>
@@ -256,13 +257,12 @@ with tab_heatmap:
                 unsafe_allow_html=True
             )
 
-            # Plot (normal block; header stays frozen as you scroll the page)
             st.plotly_chart(fig, use_container_width=True)
 
-            # diagnostics
             valid = int(np.isfinite(RAW_DELTA).sum()); total = int(RAW_DELTA.size)
             counts = {c: int(np.isfinite(RAW_DELTA[:, j]).sum()) for j, c in enumerate(delta_cols)}
             st.caption(f"Valid delta cells: **{valid}/{total}** — per column: {counts}. Grey = not enough history.")
+
 
 # ================== Tab 2 : Seasonals (daily, by year) ==================
 with tab_seasonals:
